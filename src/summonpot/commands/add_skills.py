@@ -114,7 +114,8 @@ def _write_claude(root: Path) -> list[Path]:
     skill_dir.mkdir(parents=True, exist_ok=True)
     path = skill_dir / "SKILL.md"
     path.write_text(
-        claude_skill(skill_body(), name=SKILL_NAME, description=SKILL_DESCRIPTION)
+        claude_skill(skill_body(), name=SKILL_NAME, description=SKILL_DESCRIPTION),
+        encoding="utf-8",
     )
     return [path]
 
@@ -123,7 +124,9 @@ def _write_cursor(root: Path) -> list[Path]:
     rules = root / ".cursor" / "rules"
     rules.mkdir(parents=True, exist_ok=True)
     path = rules / f"{SKILL_NAME}.mdc"
-    path.write_text(cursor_rule(skill_body(), description=SKILL_DESCRIPTION))
+    path.write_text(
+        cursor_rule(skill_body(), description=SKILL_DESCRIPTION), encoding="utf-8"
+    )
     return [path]
 
 
@@ -131,7 +134,9 @@ def _write_windsurf(root: Path) -> list[Path]:
     rules = root / ".windsurf" / "rules"
     rules.mkdir(parents=True, exist_ok=True)
     path = rules / f"{SKILL_NAME}.md"
-    path.write_text(windsurf_rule(skill_body(), description=SKILL_DESCRIPTION))
+    path.write_text(
+        windsurf_rule(skill_body(), description=SKILL_DESCRIPTION), encoding="utf-8"
+    )
     return [path]
 
 
@@ -139,7 +144,7 @@ def _write_cline(root: Path) -> list[Path]:
     rules = root / ".clinerules"
     rules.mkdir(parents=True, exist_ok=True)
     path = rules / f"{SKILL_NAME}.md"
-    path.write_text(cline_rule(skill_body()))
+    path.write_text(cline_rule(skill_body()), encoding="utf-8")
     return [path]
 
 
@@ -164,7 +169,7 @@ def _upsert_managed_block(path: Path, content: str) -> None:
     re-run rather than appended again.
     """
     block = f"{_MANAGED_START}\n{content.rstrip()}\n{_MANAGED_END}\n"
-    existing = path.read_text() if path.exists() else ""
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
 
     _validate_managed_markers(existing, path)
 
@@ -185,7 +190,7 @@ def _upsert_managed_block(path: Path, content: str) -> None:
     else:
         updated = block
 
-    path.write_text(updated)
+    path.write_text(updated, encoding="utf-8")
 
 
 _WRITERS: dict[Agent, Callable[[Path], list[Path]]] = {

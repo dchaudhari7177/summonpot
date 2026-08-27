@@ -31,14 +31,14 @@ def test_skill_is_written_where_the_agent_reads_it(agent, relative, tmp_path: Pa
     assert result.exit_code == 0
     written = tmp_path / relative
     assert written.is_file()
-    assert "@summon" in written.read_text()
+    assert "@summon" in written.read_text(encoding="utf-8")
 
 
 def test_claude_skill_has_the_frontmatter_that_makes_it_discoverable(tmp_path: Path):
     """Claude Code never loads a skill file without name and description."""
     runner.invoke(app, ["add", "skills", "--agent", "claude", "--path", str(tmp_path)])
 
-    text = (tmp_path / ".claude/skills/summonpot/SKILL.md").read_text()
+    text = (tmp_path / ".claude/skills/summonpot/SKILL.md").read_text(encoding="utf-8")
 
     assert text.startswith("---\n")
     assert '"summonpot"' in text.split("---")[1]
@@ -48,10 +48,10 @@ def test_claude_skill_has_the_frontmatter_that_makes_it_discoverable(tmp_path: P
 def test_shared_files_keep_their_own_content(tmp_path: Path):
     """AGENTS.md belongs to the project; the skill is a fenced guest."""
     agents = tmp_path / "AGENTS.md"
-    agents.write_text("# My project\n\nExisting notes.\n")
+    agents.write_text("# My project\n\nExisting notes.\n", encoding="utf-8")
 
     runner.invoke(app, ["add", "skills", "--agent", "codex", "--path", str(tmp_path)])
-    text = agents.read_text()
+    text = agents.read_text(encoding="utf-8")
 
     assert "# My project" in text
     assert "Existing notes." in text
@@ -64,7 +64,9 @@ def test_reinstalling_replaces_the_block_rather_than_appending(tmp_path: Path):
             app, ["add", "skills", "--agent", "codex", "--path", str(tmp_path)]
         )
 
-    assert (tmp_path / "AGENTS.md").read_text().count("summonpot:managed:start") == 1
+    assert (tmp_path / "AGENTS.md").read_text(encoding="utf-8").count(
+        "summonpot:managed:start"
+    ) == 1
 
 
 def test_agents_are_detected_from_existing_configuration(tmp_path: Path):
@@ -108,11 +110,12 @@ def test_reinstall_keeps_content_that_follows_the_block(
     agents = tmp_path / "AGENTS.md"
     agents.write_text(
         "<!-- summonpot:managed:start -->\nold\n<!-- summonpot:managed:end -->"
-        + trailing
+        + trailing,
+        encoding="utf-8",
     )
 
     runner.invoke(app, ["add", "skills", "--agent", "codex", "--path", str(tmp_path)])
-    text = agents.read_text()
+    text = agents.read_text(encoding="utf-8")
 
     # Ending with the exact trailing text is what proves no character was eaten:
     # the old code turned "AFTER" into "FTER".
@@ -135,7 +138,7 @@ def test_a_bare_github_directory_is_not_copilot_configuration(tmp_path: Path):
 def test_an_existing_copilot_instructions_file_is_detected(tmp_path: Path):
     instructions = tmp_path / ".github" / "copilot-instructions.md"
     instructions.parent.mkdir(parents=True)
-    instructions.write_text("# House rules\n")
+    instructions.write_text("# House rules\n", encoding="utf-8")
 
     assert detect_agents(tmp_path) == [Agent.copilot]
 
