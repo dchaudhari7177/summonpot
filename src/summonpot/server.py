@@ -57,7 +57,7 @@ def build_app(summon: Summon) -> Any:
                 from pydantic import create_model
 
                 fields: dict[str, tuple[type, Any]] = {}
-                for p in endpoint.parameters:
+                for p in _body_parameters(endpoint):
                     field_type = _field_type(p)
                     if p.required:
                         fields[p.name] = (field_type, ...)
@@ -172,19 +172,77 @@ async def _run_endpoint(summon: Any, endpoint: Any, params: dict[str, Any]) -> A
         ) from exc
 
 
+def _body_parameters(endpoint: Any) -> list[Any]:
+    """The declared parameters the JSON body owns.
+
+    Path parameters are excluded: the URL is the single authority for them, and
+    leaving them in the generated model would put the same value in two places
+    with the body silently winning.
+    """
+    owned = set(getattr(endpoint, "path_parameter_names", ()) or ())
+    return [p for p in endpoint.parameters if p.name not in owned]
+
+
+def _path_parameters(endpoint: Any) -> list[Any]:
+    """The declared parameters bound from the URL, in route order."""
+    by_name = {p.name: p for p in endpoint.parameters}
+    return [
+        by_name[name]
+        for name in getattr(endpoint, "path_parameter_names", ()) or ()
+        if name in by_name
+    ]
+
+
 def _make_body_handler(endpoint: Any, summon: Any, request_model: type[Any]) -> Any:
     """Create a body-only route handler while retaining endpoint context in its closure."""
 
-    async def handle(body: Any) -> Any:
+    path_parameters = _path_parameters(endpoint)
+
+    async def handle(body: Any, **path_values: Any) -> Any:
         if hasattr(body, "model_dump"):
             prompt = body.model_dump(mode="json", by_alias=True)
             typed = {name: getattr(body, name) for name in type(body).model_fields}
-            params = _RequestValues(prompt, typed=typed)
         else:
-            params = _RequestValues(body)
-        return await _run_endpoint(summon, endpoint, params)
+            prompt = dict(body or {})
+            typed = dict(prompt)
 
-    handle.__annotations__["body"] = request_model
+        # The URL wins, and nothing it owns was ever in the body model, so
+        # there is nothing here to overwrite -- this adds, it does not resolve a
+        # conflict. Both views are kept: `typed` carries the value FastAPI
+        # validated (an int stays an int, a UUID stays a UUID), while `prompt`
+        # carries a JSON-safe rendering for the model prompt.
+        for name, value in path_values.items():
+            typed[name] = value
+            prompt[name] = (
+                value if isinstance(value, (str, int, float, bool)) else str(value)
+            )
+
+        return await _run_endpoint(
+            summon, endpoint, _RequestValues(prompt, typed=typed)
+        )
+
+    # FastAPI reads __signature__, so naming the path parameters explicitly is
+    # what turns them into bound, validated, documented path parameters instead
+    # of an undocumented **kwargs. Same technique as _make_query_handler.
+    # It is set even when there are no path parameters: without it FastAPI
+    # inspects the real signature, sees `**path_values`, and tries to bind it.
+    parameters = [
+        inspect.Parameter(
+            "body", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=request_model
+        )
+    ]
+    annotations: dict[str, Any] = {"body": request_model}
+    for p in path_parameters:
+        annotation = _field_type(p)
+        parameters.append(
+            inspect.Parameter(
+                p.name, inspect.Parameter.KEYWORD_ONLY, annotation=annotation
+            )
+        )
+        annotations[p.name] = annotation
+
+    handle.__signature__ = inspect.Signature(parameters)  # type: ignore[attr-defined]
+    handle.__annotations__ = annotations
     return handle
 
 

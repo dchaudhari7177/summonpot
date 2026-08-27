@@ -618,3 +618,133 @@ def test_provider_misconfiguration_is_reported_not_swallowed(caplog):
     assert "not configured" in caplog.text
     assert "SUMMONPOT_MODEL=test" in caplog.text
     assert "OPENAI_API_KEY" in caplog.text
+
+
+# --- #78: the URL is the single authority for a path parameter ---------------
+
+
+class _RecordingRuntime:
+    """Captures exactly what the runtime was handed."""
+
+    def __init__(self) -> None:
+        self.prompt: dict = {}
+        self.typed: dict = {}
+
+    async def call(self, endpoint, params):
+        self.prompt = dict(params)
+        self.typed = dict(getattr(params, "typed", params))
+        return "ok"
+
+
+def _customer_app(annotation: type = str):
+    summon = Summon("svc")
+
+    def update_customer(customer_id: annotation, name: str) -> str:  # type: ignore[valid-type]
+        """Update one customer."""
+        return ""
+
+    update_customer.__annotations__["customer_id"] = annotation
+    summon.summon("/customers/{customer_id}", method="POST")(update_customer)
+
+    runtime = _RecordingRuntime()
+    summon._runtime = runtime
+    return summon, runtime
+
+
+def test_path_parameter_is_declared_in_the_openapi_schema():
+    summon, _ = _customer_app()
+    operation = build_app(summon).openapi()["paths"]["/customers/{customer_id}"]["post"]
+
+    declared = [(p["name"], p["in"], p["required"]) for p in operation["parameters"]]
+    assert declared == [("customer_id", "path", True)]
+
+
+def test_path_parameter_is_excluded_from_the_generated_body_model():
+    """It cannot be in two places, so it is in exactly one."""
+    summon, _ = _customer_app()
+    schemas = build_app(summon).openapi()["components"]["schemas"]
+
+    model = next(v for k, v in schemas.items() if k.endswith("Request"))
+    assert sorted(model["properties"]) == ["name"]
+
+
+def test_the_url_value_reaches_the_runtime():
+    summon, runtime = _customer_app()
+    client = TestClient(build_app(summon), raise_server_exceptions=False)
+
+    assert client.post("/customers/url-id", json={"name": "Ada"}).status_code == 200
+    assert runtime.prompt["customer_id"] == "url-id"
+    assert runtime.typed["customer_id"] == "url-id"
+
+
+def test_a_conflicting_body_identifier_does_not_win():
+    """The reported case: URL says one thing, body says another.
+
+    Before, the runtime received the body value and the URL was decorative.
+    """
+    summon, runtime = _customer_app()
+    client = TestClient(build_app(summon), raise_server_exceptions=False)
+
+    response = client.post(
+        "/customers/url-id", json={"customer_id": "body-id", "name": "Ada"}
+    )
+
+    assert response.status_code == 200
+    assert runtime.prompt["customer_id"] == "url-id"
+    assert runtime.typed["customer_id"] == "url-id"
+
+
+def test_a_typed_path_parameter_arrives_converted():
+    """`typed` keeps the validated Python value; `prompt` stays JSON-safe."""
+    summon, runtime = _customer_app(int)
+    client = TestClient(build_app(summon), raise_server_exceptions=False)
+
+    assert client.post("/customers/42", json={"name": "Ada"}).status_code == 200
+    assert runtime.typed["customer_id"] == 42
+    assert isinstance(runtime.typed["customer_id"], int)
+
+
+def test_an_unconvertible_path_value_is_a_422():
+    summon, _ = _customer_app(int)
+    client = TestClient(build_app(summon), raise_server_exceptions=False)
+
+    assert client.post("/customers/nope", json={"name": "Ada"}).status_code == 422
+
+
+def test_a_route_without_placeholders_is_unchanged():
+    """Regression: the body handler's signature is synthesised either way."""
+    summon = Summon("svc")
+
+    @summon.summon("/customers", method="POST")
+    def create_customer(name: str) -> str:
+        """Create one customer."""
+        return ""
+
+    runtime = _RecordingRuntime()
+    summon._runtime = runtime
+    app = build_app(summon)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    assert client.post("/customers", json={"name": "Ada"}).status_code == 200
+    assert runtime.prompt == {"name": "Ada"}
+    assert app.openapi()["paths"]["/customers"]["post"].get("parameters") is None
+
+
+@pytest.mark.parametrize("method", ["GET", "DELETE"])
+def test_bodyless_path_parameters_still_work(method):
+    """GET/DELETE bound placeholders before this change and must still."""
+    summon = Summon("svc")
+
+    def get_customer(customer_id: str) -> str:
+        """Read one customer."""
+        return ""
+
+    summon.summon("/customers/{customer_id}", method=method)(get_customer)
+    runtime = _RecordingRuntime()
+    summon._runtime = runtime
+    client = TestClient(build_app(summon), raise_server_exceptions=False)
+
+    response = client.request(method, "/customers/url-id")
+
+    assert response.status_code == 200
+    assert runtime.prompt["customer_id"] == "url-id"

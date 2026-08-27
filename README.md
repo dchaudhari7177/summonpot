@@ -459,6 +459,29 @@ def list_tickets(
 annotations, invalid capability callables, duplicate capability names, unsupported query
 types, and `stream=True`.
 
+### Path parameters
+
+A `{name}` placeholder in a route binds from the URL on every method, body-carrying
+ones included. Each placeholder must match exactly one **required scalar** parameter
+(`str`, `int`, `float`, `bool`, `UUID`):
+
+```python
+@summon("/customers/{customer_id}", method="POST")
+def update_customer(customer_id: int, name: str) -> str:
+    """Update one customer."""
+    ...
+```
+
+`customer_id` is documented as an OpenAPI path parameter and is **excluded from the
+generated request body model**, so the value exists in exactly one place. The URL is
+the only authority for it: a body that also carries `customer_id` does not override
+the URL.
+
+These fail at import time, next to the other registration errors above: a placeholder
+with no matching parameter, the same placeholder twice, a path parameter with a
+default, and a path parameter annotated with anything but a supported scalar. A
+structured value belongs in the body.
+
 ## Provider and model configuration
 
 | Provider | Install extra | Model example | API-key variable |
