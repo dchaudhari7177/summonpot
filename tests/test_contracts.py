@@ -7,6 +7,9 @@ bindings yet.
 
 from __future__ import annotations
 
+from decimal import Decimal
+from fractions import Fraction
+
 import pytest
 from pydantic import BaseModel
 
@@ -131,6 +134,119 @@ def test_call_bound_helpers(bounds, minimum, maximum):
 def test_unsatisfiable_bounds_are_rejected():
     with pytest.raises(ValueError, match="unsatisfiable"):
         CallBounds(minimum=2, maximum=1)
+
+
+# A bound counts operation starts. These are the kinds of value that cannot be
+# one, including `bool` -- which is an `int` subclass, so it used to be accepted
+# silently as 0 or 1.
+NOT_A_COUNT = [
+    pytest.param(True, id="bool-true"),
+    pytest.param(False, id="bool-false"),
+    pytest.param(1.5, id="float"),
+    pytest.param(2.0, id="whole-float"),
+    pytest.param("1", id="str"),
+    pytest.param(Decimal(1), id="decimal"),
+    pytest.param(Fraction(1, 1), id="fraction"),
+    pytest.param([1], id="list"),
+]
+
+# `None` is deliberately absent above: it is `CallBounds.maximum`'s documented
+# "unbounded" sentinel, so rejecting it would break the existing default rather
+# than catch a wrong kind of value. It is still not a valid *minimum*.
+
+
+@pytest.mark.parametrize("value", NOT_A_COUNT)
+@pytest.mark.parametrize("helper", [Exactly, AtLeast, AtMost])
+def test_a_single_argument_helper_rejects_a_non_count(helper, value):
+    with pytest.raises(TypeError, match="must be a built-in int"):
+        helper(value)
+
+
+@pytest.mark.parametrize("helper", [Exactly, AtLeast])
+def test_a_minimum_setting_helper_rejects_none(helper):
+    with pytest.raises(TypeError, match="minimum must be a built-in int"):
+        helper(None)
+
+
+def test_an_absent_maximum_still_means_unbounded():
+    """The sentinel predates this check and keeps working."""
+    assert CallBounds(minimum=1).maximum is None
+    assert AtLeast(1).maximum is None
+
+
+@pytest.mark.parametrize("value", NOT_A_COUNT)
+def test_between_rejects_a_non_count_minimum(value):
+    with pytest.raises(TypeError, match="minimum must be a built-in int"):
+        Between(value, 3)
+
+
+@pytest.mark.parametrize("value", NOT_A_COUNT)
+def test_between_rejects_a_non_count_maximum(value):
+    with pytest.raises(TypeError, match="maximum must be a built-in int"):
+        Between(1, value)
+
+
+@pytest.mark.parametrize("field", ["minimum", "maximum"])
+def test_the_error_names_the_offending_bound(field):
+    """A message that does not say which end is wrong sends you reading source."""
+    with pytest.raises(TypeError) as excinfo:
+        CallBounds(**{field: 1.5, **({"minimum": 1} if field == "maximum" else {})})
+
+    message = str(excinfo.value)
+    assert field in message
+    assert "float" in message
+    assert "1.5" in message
+
+
+def test_a_bool_is_not_silently_a_count():
+    """`Exactly(True)` is an expression that meant nothing becoming one that does."""
+    with pytest.raises(TypeError, match="not bool"):
+        Exactly(True)
+
+    # The comparison it used to reach would have made this Exactly(1).
+    assert CallBounds(minimum=1, maximum=1) == Exactly(1)
+
+
+def test_a_negative_count_is_still_a_value_error_not_a_type_error():
+    """Right kind of value, invalid value -- the distinction is deliberate."""
+    with pytest.raises(ValueError, match="negative"):
+        AtLeast(-1)
+
+    with pytest.raises(ValueError, match="unsatisfiable"):
+        Between(2, 1)
+
+
+@pytest.mark.parametrize(
+    ("bounds", "expected"),
+    [
+        (Exactly(0), (0, 0)),
+        (AtMost(0), (0, 0)),
+        (AtLeast(0), (0, None)),
+        (Between(0, 0), (0, 0)),
+    ],
+)
+def test_zero_bounds_remain_constructible(bounds, expected):
+    """Zero is a valid count; only the *kind* check is new."""
+    assert (bounds.minimum, bounds.maximum) == expected
+
+
+@pytest.mark.parametrize(
+    ("bounds", "description"),
+    [
+        (Exactly(2), "exactly 2"),
+        (AtLeast(2), "at least 2"),
+        (AtMost(2), "between 0 and 2"),
+        (Between(1, 3), "between 1 and 3"),
+    ],
+)
+def test_valid_bounds_keep_their_description(bounds, description):
+    assert bounds.describe() == description
+
+
+def test_valid_bounds_keep_their_equality():
+    assert Exactly(2) == CallBounds(minimum=2, maximum=2)
+    assert AtLeast(2) == CallBounds(minimum=2)
+    assert Exactly(2) != Exactly(3)
 
 
 def test_depends_defaults_to_optional_and_unbounded():
