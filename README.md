@@ -477,6 +477,20 @@ generated request body model**, so the value exists in exactly one place. The UR
 the only authority for it: a body that also carries `customer_id` does not override
 the URL.
 
+When the URL owns **every** declared parameter the route carries no request body at
+all, so it is callable with nothing but its path segments:
+
+```python
+@summon("/items/{item_id}", method="POST")
+def touch_item(item_id: int) -> Item:
+    """Touch one item."""
+    ...
+```
+
+```bash
+curl -X POST http://localhost:8000/items/7
+```
+
 These fail at import time, next to the other registration errors above: a placeholder
 with no matching parameter, the same placeholder twice, a path parameter with a
 default, and a path parameter annotated with anything but a supported scalar. A

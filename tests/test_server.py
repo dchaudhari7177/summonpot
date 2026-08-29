@@ -748,3 +748,72 @@ def test_bodyless_path_parameters_still_work(method):
 
     assert response.status_code == 200
     assert runtime.prompt["customer_id"] == "url-id"
+
+
+def _path_only_app(method: str = "POST"):
+    """A body method whose every declared parameter comes from the URL."""
+    summon = Summon("svc")
+
+    def touch_item(item_id: int) -> str:
+        """Touch one item."""
+        return ""
+
+    summon.summon("/items/{item_id}", method=method)(touch_item)
+    runtime = _RecordingRuntime()
+    summon._runtime = runtime
+    return summon, runtime
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH"])
+def test_a_path_only_body_route_needs_no_body(method):
+    """The URL already carries every value, so requiring a body is a dead end.
+
+    Before, the generated request model was an empty-but-required body: the
+    call was answered 422 and the runtime was never reached.
+    """
+    summon, runtime = _path_only_app(method)
+    client = TestClient(build_app(summon), raise_server_exceptions=False)
+
+    response = client.request(method, "/items/7")
+
+    assert response.status_code == 200
+    assert runtime.typed["item_id"] == 7
+    assert runtime.prompt["item_id"] == 7
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH"])
+def test_a_path_only_body_route_declares_no_request_body(method):
+    """OpenAPI must not advertise a body the route does not read."""
+    summon, _ = _path_only_app(method)
+    operation = build_app(summon).openapi()["paths"]["/items/{item_id}"][method.lower()]
+
+    assert "requestBody" not in operation
+    assert [(p["name"], p["in"]) for p in operation["parameters"]] == [
+        ("item_id", "path")
+    ]
+
+
+def test_a_path_only_body_route_still_validates_the_url_value():
+    summon, _ = _path_only_app()
+    client = TestClient(build_app(summon), raise_server_exceptions=False)
+
+    assert client.post("/items/not-an-int").status_code == 422
+
+
+def test_a_path_only_body_route_tolerates_a_sent_body():
+    """A client that sends a body anyway is not punished; the URL still wins."""
+    summon, runtime = _path_only_app()
+    client = TestClient(build_app(summon), raise_server_exceptions=False)
+
+    response = client.post("/items/7", json={"item_id": 99})
+
+    assert response.status_code == 200
+    assert runtime.typed["item_id"] == 7
+
+
+def test_a_mixed_route_still_requires_its_body():
+    """Guard the other side: dropping the body model must stay path-only."""
+    summon, _ = _customer_app()
+    client = TestClient(build_app(summon), raise_server_exceptions=False)
+
+    assert client.post("/customers/url-id").status_code == 422

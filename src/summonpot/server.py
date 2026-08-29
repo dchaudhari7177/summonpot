@@ -51,8 +51,16 @@ def build_app(summon: Summon) -> Any:
                 description=endpoint.description,
             )
         elif endpoint.parameters:
+            RequestModel: Any
             if endpoint.input_model is not None:
                 RequestModel = endpoint.input_model
+            elif not _body_parameters(endpoint):
+                # Every declared parameter is carried by the URL, so there is no
+                # body left to describe. Generating an empty model anyway would
+                # make the body *required*: FastAPI answers a bodyless
+                # `POST /items/{item_id}` with 422 and never reaches the runtime,
+                # even though the URL already supplied every value.
+                RequestModel = None
             else:
                 from pydantic import create_model
 
@@ -193,12 +201,19 @@ def _path_parameters(endpoint: Any) -> list[Any]:
     ]
 
 
-def _make_body_handler(endpoint: Any, summon: Any, request_model: type[Any]) -> Any:
-    """Create a body-only route handler while retaining endpoint context in its closure."""
+def _make_body_handler(
+    endpoint: Any, summon: Any, request_model: type[Any] | None
+) -> Any:
+    """Create a route handler for a body method, retaining endpoint context in its closure.
+
+    `request_model` is None when the URL owns every declared parameter. The
+    handler then takes no body argument at all, so the route stays callable
+    with nothing but its path segments.
+    """
 
     path_parameters = _path_parameters(endpoint)
 
-    async def handle(body: Any, **path_values: Any) -> Any:
+    async def handle(body: Any = None, **path_values: Any) -> Any:
         if hasattr(body, "model_dump"):
             prompt = body.model_dump(mode="json", by_alias=True)
             typed = {name: getattr(body, name) for name in type(body).model_fields}
@@ -226,12 +241,17 @@ def _make_body_handler(endpoint: Any, summon: Any, request_model: type[Any]) -> 
     # of an undocumented **kwargs. Same technique as _make_query_handler.
     # It is set even when there are no path parameters: without it FastAPI
     # inspects the real signature, sees `**path_values`, and tries to bind it.
-    parameters = [
-        inspect.Parameter(
-            "body", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=request_model
+    parameters = []
+    annotations: dict[str, Any] = {}
+    if request_model is not None:
+        parameters.append(
+            inspect.Parameter(
+                "body",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=request_model,
+            )
         )
-    ]
-    annotations: dict[str, Any] = {"body": request_model}
+        annotations["body"] = request_model
     for p in path_parameters:
         annotation = _field_type(p)
         parameters.append(
