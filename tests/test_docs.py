@@ -17,7 +17,7 @@ ROADMAP = ROOT / "ROADMAP.md"
 
 
 def _snippet_after(heading: str) -> str:
-    text = README.read_text()
+    text = README.read_text(encoding="utf-8")
     assert heading in text, f"README no longer contains {heading!r}"
     block = text.split(heading, 1)[1]
     match = re.search(r"```python\n(.*?)```", block, re.DOTALL)
@@ -67,7 +67,9 @@ def test_declaration_surfaces_use_ellipsis_instead_of_not_implemented():
         str(path.relative_to(ROOT))
         for path in surfaces
         if re.search(
-            r"^\s*raise NotImplementedError\s*$", path.read_text(), re.MULTILINE
+            r"^\s*raise NotImplementedError\s*$",
+            path.read_text(encoding="utf-8"),
+            re.MULTILINE,
         )
     ]
 
