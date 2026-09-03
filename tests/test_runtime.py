@@ -1250,8 +1250,37 @@ def test_the_retry_error_names_the_field_and_the_range(value):
 
     message = str(excinfo.value)
     assert "retries" in message
-    assert repr(value) in message or str(value) in message
     assert "0 or more" in message
+    if type(value) is int:
+        # A built-in int is safe to render, and the count is the actionable
+        # detail for a negative one.
+        assert str(value) in message
+    else:
+        # Anything else is named by type only -- see the two tests below.
+        assert type(value).__name__ in message
+
+
+def test_the_retry_error_does_not_echo_the_rejected_value():
+    """`retries` is configuration, so it can arrive holding a credential."""
+    secret = "sk-live-2f8c41d9e7b0"
+
+    with pytest.raises(TypeError) as excinfo:
+        Runtime(model="test", retries=secret)
+
+    message = str(excinfo.value)
+    assert secret not in message
+    assert "str" in message
+
+
+def test_a_retry_count_whose_repr_raises_still_gets_the_actionable_error():
+    """Rendering the value would hand control to the caller's ``__repr__``."""
+
+    class Unprintable:
+        def __repr__(self) -> str:
+            raise RuntimeError("repr exploded")
+
+    with pytest.raises(TypeError, match="retries must be a built-in int"):
+        Runtime(model="test", retries=Unprintable())
 
 
 @pytest.mark.parametrize("value", [0, 1, 3])
