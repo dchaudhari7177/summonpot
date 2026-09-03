@@ -161,17 +161,53 @@ def _write_codex(root: Path) -> list[Path]:
     return [path]
 
 
+def _dominant_newline(text: str) -> str:
+    """The line ending the file already uses, so the block can match it.
+
+    First occurrence rather than a count: a file is written by one editor with
+    one convention, and a mixed file is already inconsistent, so following the
+    majority there would still rewrite the minority. Matching the first ending
+    keeps the block consistent with the top of the file, which is where the
+    project's own instructions live.
+    """
+    index = text.find("\n")
+    if index == -1:
+        return "\n"
+    return "\r\n" if index and text[index - 1] == "\r" else "\n"
+
+
 def _upsert_managed_block(path: Path, content: str) -> None:
     """Write the skill into a shared file without disturbing the rest of it.
 
     Copilot and Codex read one file that the project also uses for its own
     instructions, so the skill is fenced in a managed block and replaced in place on
     re-run rather than appended again.
+
+    Read and written with ``newline=""``, which turns off universal-newline
+    translation in both directions. With it on, reading folded every ``\\r\\n``
+    to ``\\n`` and writing expanded every ``\\n`` to ``os.linesep``, so updating
+    the block rewrote the line endings of the *surrounding* content the command
+    promises not to touch -- CRLF to LF on macOS and Linux, LF to CRLF on
+    Windows. That is a whole-file diff for a change to one fenced region, and
+    decoded-text assertions cannot see it because the translation is symmetric
+    on the platform that performed it.
     """
-    block = f"{_MANAGED_START}\n{content.rstrip()}\n{_MANAGED_END}\n"
-    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    # `Path.read_text` only grew a `newline` argument in 3.13, and this package
+    # supports 3.11, so the handle is opened directly on both sides.
+    if path.exists():
+        with path.open(encoding="utf-8", newline="") as handle:
+            existing = handle.read()
+    else:
+        existing = ""
 
     _validate_managed_markers(existing, path)
+
+    # The block is authored with "\n" and re-expanded to whatever the file
+    # already uses, so a managed block in a CRLF file stays CRLF.
+    newline = _dominant_newline(existing)
+    block = f"{_MANAGED_START}\n{content.rstrip()}\n{_MANAGED_END}\n"
+    if newline != "\n":
+        block = block.replace("\n", newline)
 
     start = existing.find(_MANAGED_START)
     end = existing.find(_MANAGED_END)
@@ -186,11 +222,12 @@ def _upsert_managed_block(path: Path, content: str) -> None:
                 break
         updated = existing[:start] + block + existing[after:]
     elif existing.strip():
-        updated = existing.rstrip() + "\n\n" + block
+        updated = existing.rstrip() + newline * 2 + block
     else:
         updated = block
 
-    path.write_text(updated, encoding="utf-8")
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(updated)
 
 
 _WRITERS: dict[Agent, Callable[[Path], list[Path]]] = {
