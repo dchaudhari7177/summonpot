@@ -91,9 +91,15 @@ def _reject_non_count(value: object, field: str) -> None:
     caller with one of those can spell ``int(...)``.
     """
     if type(value) is not int:
+        # Name the type, never the value. The value reaches us straight from a
+        # caller's declaration, so it may carry a credential that would then be
+        # copied into logs, and its ``__repr__`` may raise -- which would
+        # replace this actionable TypeError with an arbitrary exception from
+        # somebody else's code. The type name answers "what did I write that
+        # was wrong" on its own.
         raise TypeError(
             f"Call bound {field} must be a built-in int, not "
-            f"{type(value).__name__} ({value!r}). A bound counts how many times "
+            f"{type(value).__name__}. A bound counts how many times "
             "an operation may run."
         )
 

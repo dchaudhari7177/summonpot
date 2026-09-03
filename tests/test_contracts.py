@@ -195,7 +195,35 @@ def test_the_error_names_the_offending_bound(field):
     message = str(excinfo.value)
     assert field in message
     assert "float" in message
-    assert "1.5" in message
+
+
+def test_the_error_does_not_echo_the_rejected_value():
+    """A declaration may hold a credential; the type name is enough to fix it."""
+    secret = "sk-live-2f8c41d9e7b0"
+
+    with pytest.raises(TypeError) as excinfo:
+        Exactly(secret)
+
+    message = str(excinfo.value)
+    assert secret not in message
+    assert "str" in message
+
+
+def test_a_value_whose_repr_raises_still_gets_the_actionable_error():
+    """Rendering the value would hand control to the caller's ``__repr__``."""
+
+    class Unprintable:
+        def __repr__(self) -> str:
+            raise RuntimeError("repr exploded")
+
+    with pytest.raises(TypeError, match="must be a built-in int"):
+        Exactly(Unprintable())
+
+
+def test_a_negative_bound_is_reported_without_a_repr_hazard():
+    """A built-in int is safe to name, and the count is the useful detail."""
+    with pytest.raises(ValueError, match="negative"):
+        AtLeast(-1)
 
 
 def test_a_bool_is_not_silently_a_count():
