@@ -213,7 +213,26 @@ def _make_body_handler(
 
     path_parameters = _path_parameters(endpoint)
 
-    async def handle(body: Any = None, **path_values: Any) -> Any:
+    # The synthetic body parameter shares one namespace with the path
+    # parameters, and the path parameter names come from the URL, so `body` is
+    # not ours to reserve. A route as ordinary as `/items/{body}` put two
+    # parameters called `body` into the signature below and `build_app()` died
+    # with `ValueError: duplicate parameter name: 'body'` -- the whole
+    # application refusing to start over a legal declaration. Step aside until
+    # the name is free; the prefix cannot collide in turn, because each
+    # candidate is re-checked.
+    body_name = "body"
+    taken = {p.name for p in path_parameters}
+    while body_name in taken:
+        body_name = f"_{body_name}"
+
+    # Everything arrives by keyword so that the body can be looked up under
+    # whichever name was free. Binding it positionally would mean the name in
+    # `__signature__` and the name FastAPI calls with could drift apart.
+    async def handle(**values: Any) -> Any:
+        path_values = dict(values)
+        body = path_values.pop(body_name, None)
+
         if hasattr(body, "model_dump"):
             prompt = body.model_dump(mode="json", by_alias=True)
             typed = {name: getattr(body, name) for name in type(body).model_fields}
@@ -240,18 +259,18 @@ def _make_body_handler(
     # what turns them into bound, validated, documented path parameters instead
     # of an undocumented **kwargs. Same technique as _make_query_handler.
     # It is set even when there are no path parameters: without it FastAPI
-    # inspects the real signature, sees `**path_values`, and tries to bind it.
+    # inspects the real signature, sees `**values`, and tries to bind it.
     parameters = []
     annotations: dict[str, Any] = {}
     if request_model is not None:
         parameters.append(
             inspect.Parameter(
-                "body",
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                body_name,
+                inspect.Parameter.KEYWORD_ONLY,
                 annotation=request_model,
             )
         )
-        annotations["body"] = request_model
+        annotations[body_name] = request_model
     for p in path_parameters:
         annotation = _field_type(p)
         parameters.append(

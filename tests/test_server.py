@@ -817,3 +817,75 @@ def test_a_mixed_route_still_requires_its_body():
     client = TestClient(build_app(summon), raise_server_exceptions=False)
 
     assert client.post("/customers/url-id").status_code == 422
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH"])
+def test_a_path_parameter_may_be_called_body(method):
+    """`body` is the URL author's word to use; it is not ours to reserve.
+
+    The synthetic request-body parameter shares one namespace with the path
+    parameters, so hard-coding its name put two parameters called `body` in the
+    signature and `build_app()` raised `ValueError: duplicate parameter name`
+    -- the whole application refusing to start over a legal route.
+    """
+    summon = Summon("svc")
+
+    def store_item(body: str, note: str) -> str:
+        """A route whose URL segment is spelled `body`."""
+        return ""
+
+    summon.summon("/items/{body}", method=method)(store_item)
+    runtime = _RecordingRuntime()
+    summon._runtime = runtime
+
+    app = build_app(summon)
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.request(method, "/items/from-url", json={"note": "n"})
+
+    assert response.status_code == 200
+    # The URL segment owns the name, and the body keeps its own field.
+    assert runtime.typed["body"] == "from-url"
+    assert runtime.typed["note"] == "n"
+
+    operation = app.openapi()["paths"]["/items/{body}"][method.lower()]
+    assert [p["name"] for p in operation["parameters"]] == ["body"]
+    model = operation["requestBody"]["content"]["application/json"]["schema"]["$ref"]
+    schema = app.openapi()["components"]["schemas"][model.rsplit("/", 1)[1]]
+    assert sorted(schema["properties"]) == ["note"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        pytest.param("/items/{ item_id }", id="both-sides"),
+        pytest.param("/items/{item_id }", id="trailing"),
+        pytest.param("/items/{ item_id}", id="leading"),
+        pytest.param("/items/{item id}", id="internal-space"),
+    ],
+)
+def test_a_non_canonical_placeholder_is_rejected_not_normalised(path):
+    """Stripping the braces made the declaration and the served route disagree.
+
+    `/items/{ item_id }` passed registration as `item_id`, but Starlette was
+    handed the unstripped template, so the names never matched at request time.
+    """
+    summon = Summon("svc")
+
+    def touch_item(item_id: int) -> str:
+        """Touch one item."""
+        return ""
+
+    with pytest.raises(ValueError, match="not a valid Python identifier"):
+        summon.summon(path, method="GET")(touch_item)
+
+
+def test_a_canonical_placeholder_is_still_accepted():
+    """The guard must not fire on the ordinary spelling."""
+    summon = Summon("svc")
+
+    def touch_item(item_id: int) -> str:
+        """Touch one item."""
+        return ""
+
+    summon.summon("/items/{item_id}", method="GET")(touch_item)
+    assert summon.endpoints[0].path == "/items/{item_id}"
