@@ -1255,9 +1255,6 @@ def test_the_retry_error_names_the_field_and_the_range(value):
         # A built-in int is safe to render, and the count is the actionable
         # detail for a negative one.
         assert str(value) in message
-    else:
-        # Anything else is named by type only -- see the two tests below.
-        assert type(value).__name__ in message
 
 
 def test_the_retry_error_does_not_echo_the_rejected_value():
@@ -1265,11 +1262,14 @@ def test_the_retry_error_does_not_echo_the_rejected_value():
     secret = "sk-live-2f8c41d9e7b0"
 
     with pytest.raises(TypeError) as excinfo:
-        Runtime(model="test", retries=secret)
+        Runtime(model="test", retries=secret)  # pyright: ignore[reportArgumentType]
 
     message = str(excinfo.value)
     assert secret not in message
-    assert "str" in message
+    assert message == (
+        "retries must be a built-in int. It counts how many times a "
+        "failed model call is retried, so it must be 0 or more."
+    )
 
 
 def test_a_retry_count_whose_repr_raises_still_gets_the_actionable_error():
@@ -1280,7 +1280,36 @@ def test_a_retry_count_whose_repr_raises_still_gets_the_actionable_error():
             raise RuntimeError("repr exploded")
 
     with pytest.raises(TypeError, match="retries must be a built-in int"):
-        Runtime(model="test", retries=Unprintable())
+        Runtime(model="test", retries=Unprintable())  # pyright: ignore[reportArgumentType]
+
+
+def test_a_hostile_retry_type_name_never_reaches_the_error():
+    """``__name__`` is caller-controlled too, so it is not a safe substitute."""
+
+    class Secretive:
+        pass
+
+    Secretive.__name__ = "sk-live-2f8c41d9e7b0"
+
+    with pytest.raises(TypeError) as excinfo:
+        Runtime(model="test", retries=Secretive())  # pyright: ignore[reportArgumentType]
+
+    assert "sk-live-2f8c41d9e7b0" not in str(excinfo.value)
+
+
+def test_a_retry_type_whose_name_raises_still_gets_the_actionable_error():
+    """A metaclass can make even reading ``__name__`` hand over control."""
+
+    class Hostile(type):
+        @property
+        def __name__(cls) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
+            raise RuntimeError("name exploded")
+
+    class Unnameable(metaclass=Hostile):
+        pass
+
+    with pytest.raises(TypeError, match="retries must be a built-in int"):
+        Runtime(model="test", retries=Unnameable())  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.parametrize("value", [0, 1, 3])

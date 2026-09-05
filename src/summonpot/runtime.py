@@ -165,16 +165,18 @@ def _validated_retries(retries: object) -> int:
     subclass, so ``retries=True`` would otherwise be stored as ``1``.
     """
     if type(retries) is not int:
-        # Name the type, never the value. ``retries`` is configuration, so it
-        # can arrive holding a credential that would then be copied verbatim
-        # into startup and CI logs, and a value whose ``__repr__`` raises would
-        # replace this actionable TypeError with an arbitrary exception raised
-        # from the caller's own code. The type name is what tells you which
-        # configuration to correct.
+        # Nothing about the rejected object is rendered -- not the value, and
+        # not its type. ``retries`` is configuration, so both are caller
+        # controlled: a value may hold a credential that would be copied
+        # verbatim into startup and CI logs, its ``__repr__`` may raise, and a
+        # class is free to set ``__name__`` to secret-bearing text or to make
+        # even reading it raise from a metaclass. Any of those would either
+        # leak into logs or replace this actionable TypeError with an
+        # arbitrary exception from the caller's own code. Naming the setting
+        # and the rule is what tells you which configuration to correct.
         raise TypeError(
-            f"retries must be a built-in int, not {type(retries).__name__}"
-            ". It counts how many times a failed model call is "
-            "retried, so it must be 0 or more."
+            "retries must be a built-in int. It counts how many times a "
+            "failed model call is retried, so it must be 0 or more."
         )
     if retries < 0:
         raise ValueError(
