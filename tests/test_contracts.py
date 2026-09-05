@@ -194,19 +194,22 @@ def test_the_error_names_the_offending_bound(field):
 
     message = str(excinfo.value)
     assert field in message
-    assert "float" in message
+    assert "built-in int" in message
 
 
 def test_the_error_does_not_echo_the_rejected_value():
-    """A declaration may hold a credential; the type name is enough to fix it."""
+    """A declaration may hold a credential, so no part of it is rendered."""
     secret = "sk-live-2f8c41d9e7b0"
 
     with pytest.raises(TypeError) as excinfo:
-        Exactly(secret)
+        Exactly(secret)  # pyright: ignore[reportArgumentType]
 
     message = str(excinfo.value)
     assert secret not in message
-    assert "str" in message
+    assert message == (
+        "Call bound minimum must be a built-in int. A bound counts "
+        "how many times an operation may run."
+    )
 
 
 def test_a_value_whose_repr_raises_still_gets_the_actionable_error():
@@ -217,7 +220,36 @@ def test_a_value_whose_repr_raises_still_gets_the_actionable_error():
             raise RuntimeError("repr exploded")
 
     with pytest.raises(TypeError, match="must be a built-in int"):
-        Exactly(Unprintable())
+        Exactly(Unprintable())  # pyright: ignore[reportArgumentType]
+
+
+def test_a_hostile_type_name_never_reaches_the_error():
+    """``__name__`` is caller-controlled too, so it is not a safe substitute."""
+
+    class Secretive:
+        pass
+
+    Secretive.__name__ = "sk-live-2f8c41d9e7b0"
+
+    with pytest.raises(TypeError) as excinfo:
+        Exactly(Secretive())  # pyright: ignore[reportArgumentType]
+
+    assert "sk-live-2f8c41d9e7b0" not in str(excinfo.value)
+
+
+def test_a_type_whose_name_raises_still_gets_the_actionable_error():
+    """A metaclass can make even reading ``__name__`` hand over control."""
+
+    class Hostile(type):
+        @property
+        def __name__(cls) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
+            raise RuntimeError("name exploded")
+
+    class Unnameable(metaclass=Hostile):
+        pass
+
+    with pytest.raises(TypeError, match="must be a built-in int"):
+        Exactly(Unnameable())  # pyright: ignore[reportArgumentType]
 
 
 def test_a_negative_bound_is_reported_without_a_repr_hazard():
@@ -228,8 +260,8 @@ def test_a_negative_bound_is_reported_without_a_repr_hazard():
 
 def test_a_bool_is_not_silently_a_count():
     """`Exactly(True)` is an expression that meant nothing becoming one that does."""
-    with pytest.raises(TypeError, match="not bool"):
-        Exactly(True)
+    with pytest.raises(TypeError, match="must be a built-in int"):
+        Exactly(True)  # pyright: ignore[reportArgumentType]
 
     # The comparison it used to reach would have made this Exactly(1).
     assert CallBounds(minimum=1, maximum=1) == Exactly(1)
