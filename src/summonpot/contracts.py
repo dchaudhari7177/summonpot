@@ -91,16 +91,19 @@ def _reject_non_count(value: object, field: str) -> None:
     caller with one of those can spell ``int(...)``.
     """
     if type(value) is not int:
-        # Name the type, never the value. The value reaches us straight from a
-        # caller's declaration, so it may carry a credential that would then be
-        # copied into logs, and its ``__repr__`` may raise -- which would
-        # replace this actionable TypeError with an arbitrary exception from
-        # somebody else's code. The type name answers "what did I write that
-        # was wrong" on its own.
+        # Nothing about the rejected object is rendered -- not the value, and
+        # not its type. Both reach us straight from a caller's declaration, so
+        # both are caller-controlled: a value may carry a credential, its
+        # ``__repr__`` may raise, and a class is free to set ``__name__`` to
+        # secret-bearing text or to make even reading it raise from a
+        # metaclass. Any of those would either leak into logs or replace this
+        # actionable TypeError with an arbitrary exception from somebody
+        # else's code. The declaration site in the traceback already says which
+        # expression was written, so naming the field and the rule is enough to
+        # fix it.
         raise TypeError(
-            f"Call bound {field} must be a built-in int, not "
-            f"{type(value).__name__}. A bound counts how many times "
-            "an operation may run."
+            f"Call bound {field} must be a built-in int. A bound counts "
+            "how many times an operation may run."
         )
 
 
