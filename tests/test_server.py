@@ -27,7 +27,7 @@ from summonpot import (
     Summon,
     __version__,
 )
-from summonpot.models import operation_id_for
+from summonpot.models import EndpointDef, operation_id_for
 from summonpot.runtime import Runtime
 from summonpot.server import build_app
 
@@ -1132,95 +1132,144 @@ def _two_endpoint_app():
     return summon
 
 
-def test_reassigning_an_operation_id_after_registration_is_rejected():
-    """`Summon.endpoints` hands out the live dataclasses, so registration is not the last word.
-
-    Before, the duplicate reached the schema and a FastAPI warning was the only
-    symptom; a generated client got two methods with the same name.
-    """
-    summon = _two_endpoint_app()
-    endpoints = summon.endpoints
-    endpoints[1].operation_id = endpoints[0].operation_id
-
-    with pytest.raises(ValueError, match="both carry the OpenAPI operationId"):
-        build_app(summon)
+def _served_ids(summon):
+    """The (method, operationId) pairs the built schema actually carries."""
+    return {(m, oid) for _, m, oid in _schema_operation_ids(summon)}
 
 
-def test_reassigning_an_endpoint_name_cannot_smuggle_a_duplicate():
-    """The id is derived from the name, so mutating the name must be caught too."""
-    summon = _two_endpoint_app()
-    endpoints = summon.endpoints
-    endpoints[1].name = endpoints[0].name
-    endpoints[1].operation_id = endpoints[0].operation_id
-
-    with pytest.raises(ValueError, match="both carry the OpenAPI operationId"):
-        build_app(summon)
+DERIVED_IDS = {
+    ("post", operation_id_for("first_endpoint", "POST")),
+    ("post", operation_id_for("second_endpoint", "POST")),
+}
 
 
 @pytest.mark.parametrize(
-    "arbitrary",
+    "mutate",
     [
-        pytest.param("get user profile", id="spaces"),
-        pytest.param("admin/delete_all", id="slash"),
-        pytest.param("second_endpoint_get", id="wrong-method"),
-        pytest.param("plausible_but_underived", id="plausible"),
+        pytest.param(
+            lambda eps: setattr(eps[1], "operation_id", eps[0].operation_id),
+            id="duplicate-id",
+        ),
+        pytest.param(
+            lambda eps: setattr(eps[1], "operation_id", "get user profile"),
+            id="spaces",
+        ),
+        pytest.param(
+            lambda eps: setattr(eps[1], "operation_id", "admin/delete_all"),
+            id="slash",
+        ),
+        pytest.param(
+            lambda eps: setattr(eps[1], "operation_id", ""),
+            id="cleared",
+        ),
+        pytest.param(
+            lambda eps: setattr(eps[1], "name", "renamed_endpoint"),
+            id="name",
+        ),
+        pytest.param(lambda eps: setattr(eps[1], "method", "PUT"), id="method"),
+        pytest.param(
+            lambda eps: setattr(eps[1], "method", " get "), id="method-spaced"
+        ),
+        pytest.param(lambda eps: setattr(eps[1], "method", "get"), id="method-lowered"),
+        pytest.param(
+            lambda eps: (
+                setattr(eps[1], "name", eps[0].name),
+                setattr(eps[1], "operation_id", eps[0].operation_id),
+            ),
+            id="name-and-id-together",
+        ),
     ],
 )
-def test_reassigning_a_unique_but_arbitrary_operation_id_is_rejected(arbitrary):
-    """Uniqueness is not the invariant -- the id is derived, not chosen.
+def test_mutating_an_endpoint_after_registration_cannot_change_the_schema(mutate):
+    """`Summon.endpoints` hands out the live dataclasses, so registration is not the last word.
 
-    A unique arbitrary value passed the duplicate check and was emitted into
-    the schema unchanged, which is the broken generated client the derivation
-    exists to prevent. Spaces and a slash are the clearest cases: both are
-    legal in a JSON string and neither is a legal method name.
+    The routes are built from the compiled registration plan, so none of these
+    reassignments reach the schema at all -- which is a stronger guarantee than
+    diagnosing them, and it is the rule the rest of `build_app` already follows
+    for `path` and `method`.
+
+    `" get "` is the case a derivation check alone cannot catch:
+    `operation_id_for` folds the method with `.strip().lower()`, so the spaced
+    form re-derives exactly the id it was registered with and satisfies any
+    comparison against it -- while FastAPI would register the literal string
+    and emit `" get "` as an OpenAPI path key.
     """
     summon = _two_endpoint_app()
-    summon.endpoints[1].operation_id = arbitrary
+    mutate(summon.endpoints)
 
-    with pytest.raises(ValueError, match="derive"):
-        build_app(summon)
+    schema = build_app(summon).openapi()
 
-
-def test_mutating_a_name_without_updating_the_id_is_rejected():
-    """The id is derived from the name, so the name moving alone desynchronises it."""
-    summon = _two_endpoint_app()
-    summon.endpoints[1].name = "renamed_endpoint"
-
-    with pytest.raises(ValueError, match="derive"):
-        build_app(summon)
+    assert _served_ids(summon) == DERIVED_IDS
+    assert sorted(schema["paths"]) == ["/first", "/second"]
+    for methods in schema["paths"].values():
+        assert list(methods) == ["post"]
 
 
-def test_mutating_a_method_without_updating_the_id_is_rejected():
-    """The method is the other half of the derivation."""
-    summon = _two_endpoint_app()
-    summon.endpoints[1].method = "PUT"
+def _hand_built(**overrides):
+    """A `Summon` holding an `EndpointDef` that never went through registration.
 
-    with pytest.raises(ValueError, match="derive"):
-        build_app(summon)
-
-
-def test_a_desynchronised_operation_id_never_reaches_the_schema():
-    """The acceptance criterion in its own terms: nothing arbitrary gets served."""
-    summon = _two_endpoint_app()
-    summon.endpoints[1].operation_id = "get user profile"
-
-    with pytest.raises(ValueError):
-        build_app(summon)
-
-    # And the ordinary path still emits exactly the derived ids.
-    ids = {oid for _, _, oid in _schema_operation_ids(_two_endpoint_app())}
-    assert ids == {
-        operation_id_for("first_endpoint", "POST"),
-        operation_id_for("second_endpoint", "POST"),
+    Nothing compiles a plan for it, so `build_app` falls back to the public
+    dataclass -- the one case where these checks still have to fire.
+    """
+    summon = Summon("test")
+    fields = {
+        "path": "/x",
+        "name": "x",
+        "description": "Hand built.",
+        "method": "GET",
+        "operation_id": operation_id_for("x", "GET"),
     }
+    fields.update(overrides)
+    summon._endpoints.append(EndpointDef(**fields))
+    return summon
 
 
-def test_clearing_an_operation_id_after_registration_is_rejected():
-    """An empty id would let FastAPI fall back to its handler-derived default."""
-    summon = _two_endpoint_app()
-    summon.endpoints[0].operation_id = ""
+def test_a_hand_built_endpoint_still_builds_when_it_is_consistent():
+    """The guard must not fire on the ordinary path."""
+    schema = build_app(_hand_built()).openapi()
 
-    with pytest.raises(ValueError, match="has no operationId"):
+    assert schema["paths"]["/x"]["get"]["operationId"] == "x_get"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        pytest.param({"method": " get "}, "not one of", id="method-spaced"),
+        pytest.param({"method": "get"}, "not one of", id="method-lowered"),
+        pytest.param({"method": "TRACE"}, "not one of", id="method-unsupported"),
+        pytest.param({"operation_id": "get user profile"}, "derive", id="spaces"),
+        pytest.param({"operation_id": "admin/delete_all"}, "derive", id="slash"),
+        pytest.param({"operation_id": "x_post"}, "derive", id="wrong-method"),
+        pytest.param({"operation_id": ""}, "has no operationId", id="cleared"),
+    ],
+)
+def test_a_hand_built_endpoint_with_inconsistent_metadata_is_rejected(overrides, match):
+    """Uniqueness is not the invariant -- the id is derived, not chosen.
+
+    A unique arbitrary value passes a duplicate check and would be emitted into
+    the schema unchanged, which is the broken generated client the derivation
+    exists to prevent. The method cases are separate because
+    `operation_id_for` folds the method, so a non-canonical method derives a
+    matching id and only an explicit canonical-form check catches it.
+    """
+    with pytest.raises(ValueError, match=match):
+        build_app(_hand_built(**overrides))
+
+
+def test_two_hand_built_endpoints_sharing_an_id_are_rejected():
+    """The duplicate diagnosis names the other endpoint, so it is reported first."""
+    summon = _hand_built()
+    summon._endpoints.append(
+        EndpointDef(
+            path="/y",
+            name="x",
+            description="Also hand built.",
+            method="GET",
+            operation_id=operation_id_for("x", "GET"),
+        )
+    )
+
+    with pytest.raises(ValueError, match="both carry the OpenAPI operationId"):
         build_app(summon)
 
 

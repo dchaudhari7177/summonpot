@@ -15,7 +15,7 @@ from summonpot._execution import (
     _validated_transport_request,
 )
 from summonpot.models import operation_id_for
-from summonpot.summon import BODYLESS_METHODS, _unwrap_annotated
+from summonpot.summon import BODYLESS_METHODS, SUPPORTED_METHODS, _unwrap_annotated
 
 if TYPE_CHECKING:
     from summonpot.summon import Summon
@@ -36,12 +36,18 @@ def build_app(summon: Summon) -> Any:
         version=__version__,
     )
 
-    _reject_invalid_operation_ids(summon.endpoints)
+    # Pair each public endpoint with the metadata that will actually be served,
+    # then validate *that*. Registration-time metadata is authoritative for
+    # transport and execution alike, so the checks below have to read the same
+    # thing the routes do -- checking the mutable EndpointDef would pass or fail
+    # on values no route ever sees.
+    served = [
+        (endpoint, _registered_plan(endpoint) or endpoint)
+        for endpoint in summon.endpoints
+    ]
+    _reject_invalid_operation_ids([definition for _, definition in served])
 
-    for endpoint in summon.endpoints:
-        # Registration-time metadata is authoritative for both transport and
-        # execution; later mutation of the public definition cannot change a route.
-        definition = _registered_plan(endpoint) or endpoint
+    for endpoint, definition in served:
         route_path = definition.path
         method = definition.method
 
@@ -128,9 +134,32 @@ def _reject_invalid_operation_ids(endpoints: list[Any]) -> None:
     after it without building a new app. Uniqueness then follows for free,
     except where two endpoints genuinely share a name and method, which is
     still reported below.
+
+    The argument is the *served* metadata, not `Summon.endpoints`. For a
+    registered endpoint that is the immutable compiled plan, so a reassignment
+    after registration is already inert by the time this runs. The public
+    definition is still what reaches here when no plan is registered -- an
+    `EndpointDef` built by hand and appended -- and that is the case these
+    checks exist for.
     """
     seen: dict[str, Any] = {}
     for endpoint in endpoints:
+        # Before the id, because the id is derived from this. `operation_id_for`
+        # folds the method (`.strip().lower()`), so an equivalent-but-
+        # noncanonical method still derives the id it was registered with and
+        # would satisfy the check below -- while FastAPI registers the literal
+        # string, emitting `" get "` as an OpenAPI path key. Registration
+        # accepts only a member of SUPPORTED_METHODS, so requiring one here
+        # holds the same invariant rather than inventing a second one.
+        if endpoint.method not in SUPPORTED_METHODS:
+            raise ValueError(
+                f"Endpoint {endpoint.name!r} is served with the HTTP method "
+                f"{endpoint.method!r}, which is not one of "
+                f"{', '.join(sorted(SUPPORTED_METHODS))}. Methods are normalized "
+                "at registration, so this endpoint had its method reassigned "
+                "afterwards. Serving it would put the literal string into the "
+                "schema as a path key."
+            )
         operation_id = endpoint.operation_id
         if not operation_id:
             raise ValueError(
