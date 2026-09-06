@@ -154,11 +154,20 @@ def AtLeast(count: int) -> CallBounds:
 
 def AtMost(count: int) -> CallBounds:
     """Run this operation at most ``count`` times."""
+    # Checked here rather than left to ``CallBounds``. ``maximum=None`` is the
+    # dataclass's unbounded sentinel, so ``__post_init__`` has to skip it --
+    # but a caller who *wrote* ``AtMost(None)`` did not omit a maximum, they
+    # named one and named it wrong. Only the helper can tell those apart,
+    # because only the helper knows an argument was supplied.
+    _reject_non_count(count, "maximum")
     return CallBounds(maximum=count)
 
 
 def Between(minimum: int, maximum: int) -> CallBounds:
     """Run this operation between ``minimum`` and ``maximum`` times."""
+    # Same reason as ``AtMost``: ``Between(1, None)`` is an explicit maximum,
+    # not an omitted one, and would otherwise be accepted as unbounded.
+    _reject_non_count(maximum, "maximum")
     return CallBounds(minimum=minimum, maximum=maximum)
 
 

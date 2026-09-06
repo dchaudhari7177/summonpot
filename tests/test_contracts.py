@@ -174,6 +174,28 @@ def test_an_absent_maximum_still_means_unbounded():
     assert AtLeast(1).maximum is None
 
 
+def test_a_maximum_setting_helper_rejects_an_explicit_none():
+    """`None` is an omitted maximum, not a written one.
+
+    `CallBounds.maximum=None` has to stay the unbounded sentinel, so
+    `__post_init__` cannot reject it. But `AtMost(None)` and `Between(1, None)`
+    are not omissions -- the caller supplied an argument, and supplied one that
+    is not a count. Only the helper knows an argument was passed at all, so
+    that is where the two are told apart.
+    """
+    with pytest.raises(TypeError, match="maximum must be a built-in int"):
+        AtMost(None)  # pyright: ignore[reportArgumentType]
+
+    with pytest.raises(TypeError, match="maximum must be a built-in int"):
+        Between(1, None)  # pyright: ignore[reportArgumentType]
+
+
+def test_rejecting_an_explicit_none_does_not_reject_the_sentinel():
+    """The guard is on the helpers, so the dataclass default is untouched."""
+    assert CallBounds().maximum is None
+    assert CallBounds(minimum=2, maximum=None).maximum is None
+
+
 @pytest.mark.parametrize("value", NOT_A_COUNT)
 def test_between_rejects_a_non_count_minimum(value):
     with pytest.raises(TypeError, match="minimum must be a built-in int"):
