@@ -1205,14 +1205,19 @@ def test_mutating_an_endpoint_after_registration_cannot_change_the_schema(mutate
         assert list(methods) == ["post"]
 
 
-def _hand_built(**overrides):
+def _hand_built(**overrides: Any) -> Summon:
     """A `Summon` holding an `EndpointDef` that never went through registration.
 
     Nothing compiles a plan for it, so `build_app` falls back to the public
     dataclass -- the one case where these checks still have to fire.
     """
     summon = Summon("test")
-    fields = {
+    # Annotated rather than inferred: the literal below is all-str, so the
+    # inferred `dict[str, str]` makes every `EndpointDef` argument a str and
+    # the constructor call fails to typecheck against the heterogeneous
+    # signature (`stream: bool`, `parameters: list[ParamDef]`,
+    # `input_model: type[BaseModel] | None`). An override may carry any of them.
+    fields: dict[str, Any] = {
         "path": "/x",
         "name": "x",
         "description": "Hand built.",
